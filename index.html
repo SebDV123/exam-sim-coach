@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exam Simulation Coach</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      max-width: 900px;
+      margin: 24px auto;
+      padding: 0 16px;
+      line-height: 1.4;
+    }
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 1rem;
+    }
+    .card {
+      border: 1px solid #ddd;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 16px 0;
+    }
+    .q {
+      padding: 12px;
+      border: 1px solid #eee;
+      border-radius: 10px;
+      margin: 12px 0;
+    }
+    .mcqopt {
+      display: block;
+      margin: 6px 0;
+    }
+    .timer {
+      font-weight: 700;
+    }
+    textarea {
+      width: 100%;
+      min-height: 90px;
+      font-family: inherit;
+    }
+    button {
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid #999;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>Exam Simulation Coach</h1>
+  <div class="card">
+    <label>Board: <input id="board" value="demo"></label>
+    <label style="margin-left:8px;">Level: <input id="level" value="demo"></label>
+    <label style="margin-left:8px;">Subject: <input id="subject" value="demo"></label>
+    <label style="margin-left:8px;">Time per mark (s): <input id="secs" type="number" value="60"></label>
+    <button onclick="loadPaper()">Load Paper</button>
+    <span class="timer" id="timer"></span>
+  </div>
+
+  <div class="card" id="paper"></div>
+  <div class="card" id="results"></div>
+
+<script>
+let paper = null;
+let startTime = null;
+let timerInterval = null;
+let totalSeconds = 0;
+
+async function loadPaper() {
+  // Clear previous state
+  document.getElementById('paper').innerHTML = '';
+  document.getElementById('results').innerHTML = '';
+  if (timerInterval) clearInterval(timerInterval);
+  // Build request payload
+  const payload = {
+    board: document.getElementById('board').value || 'demo',
+    level: document.getElementById('level').value || 'demo',
+    subject: document.getElementById('subject').value || 'demo',
+    topics: []
+  };
+  // Fetch paper from backend
+  const resp = await fetch('/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await resp.json();
+  paper = data.questions;
+  renderPaper();
+  startTimer();
+}
+
+function renderPaper() {
+  const wrap = document.getElementById('paper');
+  wrap.innerHTML = '';
+  paper.forEach((q, i) => {
+    const div = document.createElement('div');
+    div.className = 'q';
+    div.innerHTML = `<strong>Q${i + 1} (${q.marks} marks)</strong><br>${q.stem}`;
+    if (q.type === 'mcq') {
+      q.options.forEach((opt, j) => {
+        const label = document.createElement('label');
+        label.className = 'mcqopt';
+        const key = opt.trim().charAt(0);
+        label.innerHTML = `<input type="radio" name="q${i}" value="${key}"> ${opt}`;
+        div.appendChild(label);
+      });
+    } else {
+      const ta = document.createElement('textarea');
+      ta.id = `q${i}_text`;
+      ta.placeholder = 'Type your answer...';
+      div.appendChild(ta);
+    }
+    wrap.appendChild(div);
+  });
+  const btn = document.createElement('button');
+  btn.textContent = 'Submit';
+  btn.onclick = submitAnswers;
+  wrap.appendChild(btn);
+}
+
+function startTimer() {
+  if (timerInterval) clearInterval(timerInterval);
+  const secsPerMark = parseInt(document.getElementById('secs').value, 10) || 60;
+  const totalMarks = paper.reduce((a, q) => a + q.marks, 0);
+  totalSeconds = totalMarks * secsPerMark;
+  startTime = Date.now();
+  timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const remaining = Math.max(0, totalSeconds - elapsed);
+    const m = String(Math.floor(remaining / 60)).padStart(2, '0');
+    const s = String(remaining % 60).padStart(2, '0');
+    document.getElementById('timer').textContent = `Time remaining: ${m}:${s}`;
+    if (remaining <= 0) {
+      clearInterval(timerInterval);
+      submitAnswers();
+    }
+  }, 1000);
+}
+
+async function submitAnswers() {
+  if (!paper) return;
+  const answers = {};
+  paper.forEach((q, i) => {
+    if (q.type === 'mcq') {
+      const chosen = document.querySelector(`input[name="q${i}"]:checked`);
+      answers[i] = chosen ? chosen.value : '';
+    } else {
+      const ta = document.getElementById(`q${i}_text`);
+      answers[i] = ta ? ta.value : '';
+    }
+  });
+  const payload = { paper: paper, answers: answers };
+  const resp = await fetch('/mark_bundle', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await resp.json();
+  renderResults(data);
+}
+
+function renderResults(res) {
+  const d = document.getElementById('results');
+  let html = `<h2>Results</h2><p><strong>${res.total_awarded}/${res.total_max}</strong> marks</p><ul>`;
+  res.results.forEach(r => {
+    html += `<li>Q${r.q_index + 1}: ${r.awarded}/${r.max_marks} – ${r.feedback}</li>`;
+  });
+  html += '</ul>';
+  d.innerHTML = html;
+}
+</script>
+</body>
+</html>
